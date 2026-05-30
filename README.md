@@ -6,14 +6,14 @@ Unlike hybrid approaches that subordinate the LLM to a classical optimizer, the 
 
 ## Status
 
-Milestone 1: porting Autoresearch to a tabular tasks and running an LLM-only baseline.
+Milestone 1: porting Autoresearch to tabular tasks and running an LLM-only baseline.
 
 ## Roadmap
 
 1. Tabular Autoresearch port and LLM-only baseline.
 2. Characterization study of baseline behavior.
 3. First AutoML-derived tool, informed by #2.
-4. Deirection-selection policy (restart/bandit over model families).
+4. Direction-selection policy (restart/bandit over model families).
 5. Extended analysis.
 
 ## Proposal
