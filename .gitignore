@@ -1,0 +1,41 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv
+worktrees/
+results/
+queue/
+
+# Agent prompt files (generated per-session by launchers)
+CLAUDE.md
+AGENTS.md
+
+# Internal LLM-to-LLM coordination / session handoff notes (local only)
+HANDOFF.md
+
+# Experimental code/artifacts
+dev/
+
+# Results file
+results.tsv
+
+# Trial logs (JSONL ledger, per-trial run.log, session metadata)
+logs/
+
+# Test + coverage artifacts
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Local data cache (tabular task downloads live in ~/.cache/autoresearch_tabular/)
+
+# Generated analysis outputs
+analysis/
+figures/
+archive/

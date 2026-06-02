@@ -8,6 +8,18 @@ Unlike hybrid approaches that subordinate the LLM to a classical optimizer, the 
 
 Milestone 1: porting Autoresearch to tabular tasks and running an LLM-only baseline.
 
+## Repository layout
+
+- **`baseline/`** — the LLM-only baseline: a port of Karpathy's
+  [`autoresearch`](https://github.com/karpathy/autoresearch) loop to supervised
+  tabular classification. This is the *reference point*, not the contribution;
+  see [`baseline/README.md`](baseline/README.md) and
+  [`baseline/ATTRIBUTION.md`](baseline/ATTRIBUTION.md). Run sessions from inside
+  this folder.
+- *(later)* the AutoML / agentic decision layer — the actual research
+  contribution — will live in a sibling top-level folder, compared against the
+  baseline at matched trial budgets.
+
 ## Roadmap
 
 1. Tabular Autoresearch port and LLM-only baseline.

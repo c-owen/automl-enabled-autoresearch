@@ -1,0 +1,44 @@
+[project]
+name = "autoresearch"
+version = "0.1.0"
+description = "Autonomous tabular classification research harness"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "matplotlib>=3.10.8",
+    "numpy>=2.2.6",
+    "pandas>=2.3.3",
+    "scikit-learn>=1.5.0",
+    "xgboost>=2.1.0",
+    "torch>=2.2.0",
+]
+
+# torch resolves to the CPU wheel by default (the only build PyPI serves for
+# Windows). For a CUDA build, override the source, e.g.:
+#   [tool.uv.sources]
+#   torch = [{ index = "pytorch-cu128" }]
+#   [[tool.uv.index]]
+#   name = "pytorch-cu128"
+#   url = "https://download.pytorch.org/whl/cu128"
+#   explicit = true
+
+[dependency-groups]
+dev = [
+    "pytest>=8.3.0",
+    "pytest-cov>=5.0.0",
+    "nbclient>=0.10.0",
+    "nbformat>=5.10.0",
+    "ipykernel>=6.29.0",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+# Smoke is off by default; opt in with `uv run pytest -m smoke` (the CLI -m
+# overrides this default expression).
+addopts = "-m 'not smoke'"
+markers = [
+    "unit: fast tests, no subprocess or network",
+    "integration: slower tests that run train.py as a subprocess",
+    "smoke: end-to-end mini-session (off by default)",
+]
