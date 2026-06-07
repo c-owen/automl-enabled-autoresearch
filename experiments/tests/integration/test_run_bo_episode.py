@@ -8,6 +8,7 @@ import pytest
 
 import prepare
 from tools import run_bo
+from tools.start_session import start_session
 from tools.validate_jsonl import validate_jsonl
 
 _SPACE = {
@@ -55,6 +56,33 @@ def test_bo_respects_box(tmp_path):
         assert set(hp) == {"max_depth", "learning_rate"}  # only declared keys vary
         assert 2 <= hp["max_depth"] <= 6
         assert 0.02 <= hp["learning_rate"] <= 0.3
+
+
+@pytest.mark.integration
+def test_bo_refused_in_C0_session(tmp_path):
+    """A C0 session enables no capabilities -> run_bo refuses, zero ledger rows."""
+    logs = tmp_path / "logs"
+    start_session(
+        logs_dir=str(logs), task="balance-scale", seed=7, arm="C0",
+        create_branch=False, archive=False,
+        program_md_path=str(tmp_path / "program.md"),
+    )
+    with pytest.raises(run_bo.BORefusal, match="does not enable"):
+        run_bo.plan_episode(str(logs), "xgboost", 5, _SPACE)
+    assert not (logs / "runs.jsonl").exists()
+
+
+@pytest.mark.integration
+def test_bo_allowed_in_C1_session(tmp_path):
+    """A C1 session enables bo -> plan_episode proceeds."""
+    logs = tmp_path / "logs"
+    start_session(
+        logs_dir=str(logs), task="balance-scale", seed=7, arm="C1",
+        create_branch=False, archive=False,
+        program_md_path=str(tmp_path / "program.md"),
+    )
+    plan = run_bo.plan_episode(str(logs), "xgboost", 5, _SPACE)
+    assert plan["episode_id"] == "bo-ep001"
 
 
 @pytest.mark.integration

@@ -41,6 +41,10 @@ figures/
 archive/
 
 # --- experiments/ (Phase-2 grid harness) ---
+# program.md is generated per session by start_session.py (= playbook/base.md +
+# the arm's enabled sections), like CLAUDE.md/AGENTS.md above. The committed
+# source is playbook/base.md + playbook/sections/.
+experiments/program.md
 # The run-artifact patterns above are global (no leading slash) and already
 # match experiments/ subpaths (experiments/logs/, experiments/results.tsv,
 # experiments/analysis/, ...). Listed again here, explicitly scoped, so the

@@ -1,16 +1,16 @@
-"""Cheap insurance that program.md keeps its key invariants.
+"""Cheap insurance that the C0 playbook keeps its key invariants.
 
 These are presence checks, not prose review — they guard against silent removal
-of the playbook's load-bearing facts.
+of the playbook's load-bearing facts. program.md is now GENERATED per session
+(arms.generate_playbook); the C0 render is the LLM-only playbook an agent reads,
+so it is what we check here.
 """
-
-from pathlib import Path
 
 import pytest
 
-PROGRAM_MD = (Path(__file__).resolve().parents[2] / "program.md").read_text(
-    encoding="utf-8"
-)
+from arms import generate_playbook
+
+PROGRAM_MD = generate_playbook("C0")
 
 
 @pytest.mark.unit

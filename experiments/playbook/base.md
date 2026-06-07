@@ -117,3 +117,5 @@ outcome is recovered post-hoc from git history; you don't log it explicitly.
 If a trial crashes (a bug, an OOM, a bad config): if it's trivially fixable (a
 typo, a missing import), fix it and re-run. If the idea itself is broken, move
 on — the wrapper records crashes (including timeouts) automatically.
+
+{{CAPABILITY_SECTIONS}}

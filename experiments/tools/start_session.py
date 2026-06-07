@@ -16,6 +16,7 @@ The branch is named with a local-time timestamp:  autoresearch/<YYYYMMDD-HHMMSS>
 """
 
 import argparse
+import hashlib
 import json
 import os
 import random
@@ -28,11 +29,25 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from prepare import ALLOWED_FAMILIES, TASK_NAME, TRIAL_BUDGET
 from logging_lib import start_session as write_session_json
+from arms import ARMS, capabilities_for, generate_playbook
+
+_REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
-def choose_initial_model(seed: int) -> str:
-    """Deterministically pick a starting family from ALLOWED_FAMILIES."""
-    return random.Random(seed).choice(sorted(ALLOWED_FAMILIES))
+def choose_initial_model(seed: int, task: str = None) -> str:
+    """Deterministically pick a starting family from ALLOWED_FAMILIES.
+
+    Derives only from ``(seed, task)`` — never from the arm — so C0 and C1 with
+    the same seed and task start from the same family (protocol §5 quasi-pairing).
+    ``task=None`` keeps the legacy seed-only pick. (seed, task) is hashed with
+    sha256 for a stable cross-process integer seed; Python's ``hash`` is salted.
+    """
+    if task is None:
+        rng = random.Random(seed)
+    else:
+        digest = hashlib.sha256(f"{seed}:{task}".encode("utf-8")).hexdigest()
+        rng = random.Random(int(digest, 16))
+    return rng.choice(sorted(ALLOWED_FAMILIES))
 
 
 def build_branch_name(when: datetime, model: str) -> str:
@@ -88,14 +103,16 @@ def archive_previous_session(logs_dir="logs", results_tsv="results.tsv",
 
 def start_session(logs_dir="logs", task=None, seed=None, when=None,
                   locked=False, create_branch=True, archive=True,
-                  results_tsv="results.tsv", archive_root="archive", model=None):
+                  results_tsv="results.tsv", archive_root="archive", model=None,
+                  arm=None, program_md_path=None):
     """Assign the run's initial model + branch and write session.json.
 
     ``model`` forces a specific starting family (must be in ALLOWED_FAMILIES);
-    if omitted, one is picked at **random** (seeded) — the first-mover-bias
-    control. Returns the session-metadata dict. When ``create_branch`` is True,
-    a git branch is created off the current HEAD. When ``archive`` is True, any
-    prior session's ledger is moved to ``archive_root`` first.
+    if omitted, one is picked deterministically from ``(seed, task)`` — never the
+    arm — the first-mover-bias control and the quasi-pairing key (protocol §5).
+    ``arm`` (one of arms.ARMS) selects which capabilities are enabled: it stamps
+    ``arm`` + ``capabilities`` into session.json and regenerates ``program.md`` =
+    base + the arm's enabled playbook sections. Returns the session-metadata dict.
     """
     when = when or datetime.now()
     task = task or TASK_NAME
@@ -108,8 +125,14 @@ def start_session(logs_dir="logs", task=None, seed=None, when=None,
             )
         chosen_model, model_source = model, "explicit"
     else:
-        chosen_model, model_source = choose_initial_model(seed), "random"
+        chosen_model, model_source = choose_initial_model(seed, task), "random"
     branch = build_branch_name(when, chosen_model)
+
+    capabilities = None
+    if arm is not None:
+        if arm not in ARMS:
+            raise ValueError(f"arm {arm!r} not in {sorted(ARMS)}")
+        capabilities = capabilities_for(arm)
 
     archived = None
     if archive:
@@ -118,10 +141,18 @@ def start_session(logs_dir="logs", task=None, seed=None, when=None,
     if create_branch:
         subprocess.run(["git", "checkout", "-b", branch], check=True)
 
+    # Generate the arm's playbook (program.md = base + enabled sections).
+    if arm is not None:
+        path = program_md_path or os.path.join(_REPO_ROOT, "program.md")
+        with open(path, "w", encoding="utf-8") as fh:
+            fh.write(generate_playbook(arm))
+
     meta = {
         "run_id": when.strftime("%Y%m%d-%H%M%S"),
         "branch": branch,
         "task": task,
+        "arm": arm,
+        "capabilities": capabilities,
         "initial_model": chosen_model,
         "model_source": model_source,   # "explicit" or "random"
         "seed": seed,
@@ -136,6 +167,8 @@ def start_session(logs_dir="logs", task=None, seed=None, when=None,
 
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--arm", required=True, choices=sorted(ARMS),
+                        help="grid arm: C0 (LLM-only) or C1 (LLM+BO)")
     parser.add_argument("--task", default=None, help="task name (default: TASK_NAME)")
     parser.add_argument("--model", default=None, choices=sorted(ALLOWED_FAMILIES),
                         help="force the starting family (default: random, seeded)")
@@ -153,13 +186,14 @@ def main(argv=None) -> int:
     meta = start_session(
         logs_dir=args.logs_dir, task=args.task, seed=args.seed, model=args.model,
         locked=args.lock, create_branch=not args.no_branch,
-        archive=not args.no_archive,
+        archive=not args.no_archive, arm=args.arm,
     )
     if meta["archived_previous"]:
         print(f"(archived previous session -> {meta['archived_previous']})")
 
     lock_note = " (FAMILY-LOCKED — no swaps)" if meta["family_locked"] else ""
     print("\n=== autoresearch session started ===")
+    print(f"arm           : {meta['arm']} (capabilities={meta['capabilities']})")
     print(f"branch        : {meta['branch']}")
     print(f"task          : {meta['task']}")
     print(f"initial model : {meta['initial_model']} ({meta['model_source']}){lock_note}")

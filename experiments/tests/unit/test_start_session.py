@@ -43,7 +43,7 @@ def test_start_session_writes_session_json(tmp_path):
         logs_dir=str(tmp_path), task="adult", seed=7, when=when,
         locked=False, create_branch=False, archive=False,
     )
-    expected_model = choose_initial_model(7)
+    expected_model = choose_initial_model(7, "adult")  # family from (seed, task)
     assert meta["initial_model"] == expected_model
     assert meta["branch"] == f"autoresearch/20260601-143022-{expected_model}"
     assert meta["seed"] == 7
@@ -78,10 +78,10 @@ def test_start_session_explicit_model(tmp_path):
 @pytest.mark.unit
 def test_start_session_random_model_source(tmp_path):
     meta = start_session(
-        logs_dir=str(tmp_path), seed=7, when=datetime(2026, 6, 1, 9, 0, 0),
-        create_branch=False, archive=False,
+        logs_dir=str(tmp_path), task="adult", seed=7,
+        when=datetime(2026, 6, 1, 9, 0, 0), create_branch=False, archive=False,
     )
-    assert meta["initial_model"] == choose_initial_model(7)
+    assert meta["initial_model"] == choose_initial_model(7, "adult")
     assert meta["model_source"] == "random"
 
 
