@@ -56,6 +56,16 @@ _GERMAN_COLUMNS = [
     "num_dependents", "own_telephone", "foreign_worker", "class",
 ]
 
+# Column names for the headerless UCI Balance-Scale data file. Target `class` is
+# the FIRST column (B/L/R); the four features are integer weights/distances 1..5.
+_BALANCE_COLUMNS = [
+    "class", "left_weight", "left_distance", "right_weight", "right_distance",
+]
+
+# Column names for the headerless UCI CNAE-9 data file: target `class` (1..9) in
+# the FIRST column, followed by 856 word-frequency features.
+_CNAE_COLUMNS = ["class"] + [f"word_{i}" for i in range(1, 857)]
+
 # Task registry. Each entry is a *pinned, host-agnostic* data source described
 # by a config dict (direct URL + parse options) so load_task is reproducible and
 # not coupled to any one dataset platform (no OpenML). The committed ``data/``
@@ -80,6 +90,7 @@ _TASK_REGISTRY = {
         "columns": _ADULT_COLUMNS,
         "target_col": "income",
         "na_values": "?",
+        "penalty_logloss": 1.103884,  # 2 x prior-classifier logloss (tools/compute_penalties.py)
     },
     # 1k rows, 20 features (13 cat / 7 num), 30% positive. Whitespace, target 1/2.
     "credit-g": {
@@ -93,6 +104,7 @@ _TASK_REGISTRY = {
         "columns": _GERMAN_COLUMNS,
         "target_col": "class",
         "target_map": {1: "good", 2: "bad"},
+        "penalty_logloss": 1.221729,  # 2 x prior-classifier logloss (tools/compute_penalties.py)
     },
     # 4.5k rows, 16 features (10 cat / 6 num), ~11.5% positive. Zip -> ; CSV.
     "bank-marketing": {
@@ -106,6 +118,50 @@ _TASK_REGISTRY = {
         "sep": ";",
         "header": 0,
         "target_col": "y",
+        "penalty_logloss": 0.713349,  # 2 x prior-classifier logloss (tools/compute_penalties.py)
+    },
+    # 45,312 rows, 8 features, 2 classes (UP/DOWN). The TabZilla "electricity"
+    # task = OpenML dataset 151 ("electricity-normalized"); it has no UCI home, so
+    # it is fetched ONCE from the documented OpenML CSV mirror and the committed
+    # copy under data/electricity/ is canonical thereafter. The on-disk filename
+    # (electricity.csv) is independent of the mirror URL's .arff basename — the
+    # mirror serves CSV. Provenance URL:
+    #   https://www.openml.org/data/get_csv/2419/electricity-normalized.arff
+    "electricity": {
+        "url": (
+            "https://www.openml.org/data/get_csv/2419/"
+            "electricity-normalized.arff"
+        ),
+        "files": {"electricity.csv": "2edcdbafd4e402b8d5c59294f6c37c14bac534ac55a18810fb9aa2ca737d8e9f"},
+        "header": 0,
+        "target_col": "class",
+        "penalty_logloss": 1.363457,  # 2 x prior-classifier logloss (tools/compute_penalties.py)
+    },
+    # 625 rows, 4 integer features, 3 classes (B/L/R). UCI direct URL. Target is
+    # the first column (header=None + explicit columns put it at `class`).
+    "balance-scale": {
+        "url": (
+            "https://archive.ics.uci.edu/ml/machine-learning-databases/"
+            "balance-scale/balance-scale.data"
+        ),
+        "files": {"balance-scale.data": "5611187ef7345d807aa8ae22615945ade52a190537c0b1434bd44c3e877c5bb4"},
+        "header": None,
+        "columns": _BALANCE_COLUMNS,
+        "target_col": "class",
+        "penalty_logloss": 1.833024,  # 2 x prior-classifier logloss (tools/compute_penalties.py)
+    },
+    # 1,080 rows, 856 word-frequency features, 9 classes (1..9). UCI direct URL.
+    # Target (class label 1..9) is the first column.
+    "cnae-9": {
+        "url": (
+            "https://archive.ics.uci.edu/ml/machine-learning-databases/"
+            "00233/CNAE-9.data"
+        ),
+        "files": {"cnae-9.data": "fec557bade36db8d35b29596d73eab7fd88c26f75f0ba07ee69636614c5d6055"},
+        "header": None,
+        "columns": _CNAE_COLUMNS,
+        "target_col": "class",
+        "penalty_logloss": 4.394449,  # 2 x prior-classifier logloss (tools/compute_penalties.py)
     },
 }
 

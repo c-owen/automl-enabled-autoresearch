@@ -6,6 +6,7 @@ a clear operator error pointing at ``tools/fetch_datasets.py``.
 """
 
 import hashlib
+import math
 import os
 import socket
 
@@ -61,3 +62,24 @@ def test_missing_data_clear_error(tmp_path, monkeypatch):
     monkeypatch.setattr(prepare, "DATA_DIR", str(tmp_path))
     with pytest.raises(FileNotFoundError, match=r"fetch_datasets\.py"):
         prepare.load_task("adult")
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("task", _ALL_TASKS)
+def test_penalty_constants(task):
+    """Every task carries a positive pre-registered failure penalty (§6.4).
+
+    For binary tasks the literal must be ≈ 2× the analytic prior (entropy) logloss
+    within 1% — an independent check that the pasted constant is the real thing.
+    """
+    pen = prepare._TASK_REGISTRY[task].get("penalty_logloss")
+    assert isinstance(pen, (int, float)) and pen > 0, (
+        f"task {task!r} missing/invalid penalty_logloss: {pen!r}"
+    )
+
+    _X_train, y_train, _X_val, _y_val = prepare.load_task(task)
+    if y_train.nunique() == 2:
+        # Entropy of the train class prior; symmetric, so either class works.
+        p = float(y_train.value_counts(normalize=True).iloc[0])
+        analytic = -(p * math.log(p) + (1.0 - p) * math.log(1.0 - p))
+        assert abs(pen - 2.0 * analytic) / (2.0 * analytic) < 0.01
