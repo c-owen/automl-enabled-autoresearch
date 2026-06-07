@@ -43,16 +43,19 @@ _SUMMARY_FIELDS = {
 # Agent-trial statuses (what an agent trial row may carry; build_run_row guards
 # this strictly). BO rows use their own statuses: each episode trial row is
 # "bo_trial" in runs.jsonl, and the single results.tsv episode summary is
-# "bo_episode". ALL_STATUSES is what the ledger validator accepts.
+# "bo_episode". Reference-arm (R1/R2) trial rows are "reference". ALL_STATUSES is
+# what the ledger validator accepts.
 VALID_STATUSES = ("keep", "discard", "crash")
 BO_STATUSES = ("bo_trial", "bo_episode")
-ALL_STATUSES = VALID_STATUSES + BO_STATUSES
+REFERENCE_STATUSES = ("reference",)
+ALL_STATUSES = VALID_STATUSES + BO_STATUSES + REFERENCE_STATUSES
 
 # Source of a runs.jsonl row (protocol §3.5). Absent on v1 rows (treated as
-# "agent" by readers).
+# "agent" by readers). "reference" tags the scripted R1/R2 arms (Step 9).
 SOURCE_AGENT = "agent"
 SOURCE_BO = "bo"
-VALID_SOURCES = (SOURCE_AGENT, SOURCE_BO)
+SOURCE_REFERENCE = "reference"
+VALID_SOURCES = (SOURCE_AGENT, SOURCE_BO, SOURCE_REFERENCE)
 
 # Decision-record vocabulary (program.md "Decision capture").
 LOCUS_VALUES = (
@@ -379,6 +382,66 @@ def record_bo_episode_summary(commit, task, model_family, val_logloss, budget,
         "status": "bo_episode",
         "description": description,
     }
+    _append_tsv_row(results_tsv, row)
+    return row
+
+
+# ---------------------------------------------------------------------------
+# Reference-arm recording (R1/R2 — scripted classical search, no LLM)
+# ---------------------------------------------------------------------------
+
+def build_reference_run_row(summary, hyperparameters, method, trial_id,
+                            timestamp) -> dict:
+    """Assemble a runs.jsonl row for one scripted reference-arm trial.
+
+    Same measured fields as an agent row, tagged ``source="reference"`` /
+    ``status="reference"`` and carrying the search ``method`` (tpe|random). There
+    is no git commit for a scripted run, so ``commit`` is the literal "reference".
+    ``hyperparameters`` is the sampled config (the chosen family is also in
+    ``model_family``).
+    """
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "trial_id": trial_id,
+        "commit": "reference",
+        "timestamp": timestamp,
+        "task": summary["task_name"],
+        "model_family": summary["model_family"],
+        "hyperparameters": dict(hyperparameters or {}),
+        "val_logloss": summary["val_logloss"],
+        "val_acc": summary["val_acc"],
+        "val_auc": summary["val_auc"],
+        "train_seconds": summary["train_seconds"],
+        "total_seconds": summary["total_seconds"],
+        "peak_mem_mb": summary["peak_mem_mb"],
+        "n_params": summary.get("n_params"),
+        "status": "reference",
+        "description": f"reference {method} trial {trial_id}",
+        "source": SOURCE_REFERENCE,
+        "method": method,
+        "bo_episode_id": None,
+        "bo_trial_index": None,
+    }
+
+
+def record_reference_trial(summary, hyperparameters, method, logs_dir,
+                           results_tsv="results.tsv", trial_id=None,
+                           timestamp=None) -> dict:
+    """Record one reference-arm trial: append to runs.jsonl + results.tsv.
+
+    Mirrors record_trial's ledger shape (so R1/R2 ledgers are directly comparable
+    to agent sessions) but writes no per-trial run log and no decision record.
+    """
+    logs_dir = str(logs_dir)
+    runs_jsonl = os.path.join(logs_dir, "runs.jsonl")
+    if trial_id is None:
+        trial_id = _next_trial_id(runs_jsonl)
+    if timestamp is None:
+        timestamp = datetime.now(timezone.utc).isoformat()
+
+    row = build_reference_run_row(summary, hyperparameters, method, trial_id,
+                                  timestamp)
+    append_run_row(runs_jsonl, row)
     _append_tsv_row(results_tsv, row)
     return row
 
