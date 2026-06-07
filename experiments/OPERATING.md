@@ -125,9 +125,14 @@ run_reference[_batch] (R1/R2, independent, scripted)
 | `--task NAME` | `adult` | electricity / adult / credit-g / balance-scale / cnae-9 |
 | `--model FAMILY` | from (seed, task) | force the starting family |
 | `--seed N` | from timestamp | seed for the family pick + quasi-pairing |
+| `--model-id STR` | none | record the driving LLM (e.g. `claude-opus-4-8`); keep fixed across the grid |
 | `--lock` | off | family-locked run |
 | `--logs-dir DIR` | `logs` | logs directory |
 | `--no-archive` / `--no-branch` | off | skip archiving / branch creation |
+
+`session.json` also auto-records `harness_commit` (the harness git SHA) for
+reproducibility. `end_session.py` returns to `main` by default (`--base` to
+override, `--stay` to remain on the run branch).
 
 ### `tools/run_bo.py` (C1 only)
 `--family`, `--budget` (5–15), `--space '<json>'`, `--logs-dir`, `--results-tsv`.

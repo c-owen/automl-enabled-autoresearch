@@ -58,6 +58,17 @@ def _seed_from(when: datetime) -> int:
     return int(when.strftime("%Y%m%d%H%M%S"))
 
 
+def _git_head() -> str:
+    """Short HEAD SHA of the harness, for per-run reproducibility (protocol §5)."""
+    try:
+        return subprocess.check_output(
+            ["git", "rev-parse", "--short", "HEAD"], text=True,
+            stderr=subprocess.DEVNULL,
+        ).strip() or "nogit"
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        return "nogit"
+
+
 def archive_previous_session(logs_dir="logs", results_tsv="results.tsv",
                              archive_root="archive", when=None):
     """Move a prior session's artifacts out of the way so a new run starts clean.
@@ -104,7 +115,7 @@ def archive_previous_session(logs_dir="logs", results_tsv="results.tsv",
 def start_session(logs_dir="logs", task=None, seed=None, when=None,
                   locked=False, create_branch=True, archive=True,
                   results_tsv="results.tsv", archive_root="archive", model=None,
-                  arm=None, program_md_path=None):
+                  arm=None, program_md_path=None, model_id=None):
     """Assign the run's initial model + branch and write session.json.
 
     ``model`` forces a specific starting family (must be in ALLOWED_FAMILIES);
@@ -158,6 +169,8 @@ def start_session(logs_dir="logs", task=None, seed=None, when=None,
         "seed": seed,
         "family_locked": bool(locked),
         "trial_budget": TRIAL_BUDGET,
+        "harness_commit": _git_head(),   # pin the harness version (protocol §5)
+        "agent_model": model_id,         # the LLM driving this run (operator-supplied)
         "started_at": when.isoformat(timespec="seconds"),
         "archived_previous": archived,
     }
@@ -174,6 +187,9 @@ def main(argv=None) -> int:
                         help="force the starting family (default: random, seeded)")
     parser.add_argument("--seed", type=int, default=None,
                         help="RNG seed for the random model pick (default: from timestamp)")
+    parser.add_argument("--model-id", default=None,
+                        help="identity of the LLM driving this run (e.g. 'claude-opus-4-8'); "
+                             "recorded in session.json — keep it fixed across the grid")
     parser.add_argument("--lock", action="store_true",
                         help="family-locked run (agent may only use the assigned family)")
     parser.add_argument("--logs-dir", default="logs")
@@ -186,7 +202,7 @@ def main(argv=None) -> int:
     meta = start_session(
         logs_dir=args.logs_dir, task=args.task, seed=args.seed, model=args.model,
         locked=args.lock, create_branch=not args.no_branch,
-        archive=not args.no_archive, arm=args.arm,
+        archive=not args.no_archive, arm=args.arm, model_id=args.model_id,
     )
     if meta["archived_previous"]:
         print(f"(archived previous session -> {meta['archived_previous']})")
