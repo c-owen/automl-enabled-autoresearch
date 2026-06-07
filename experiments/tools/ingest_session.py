@@ -14,6 +14,8 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+import pandas as pd
+
 from tools.extract_decisions import extract_decisions
 
 
@@ -37,6 +39,16 @@ def summarize(df) -> str:
             f"{fam}={cnt}" for fam, cnt in df["model_family"].value_counts().items()
         ),
     ]
+    # BO engagement (C1 sessions only): episodes, episode-trials, adoptions.
+    if "source" in df.columns:
+        bo = df[df["source"] == "bo"]
+        if len(bo):
+            n_episodes = bo["bo_episode_id"].nunique()
+            n_adopt = int(df.get("adopted_from_episode", pd.Series(dtype=bool)).sum())
+            lines.append(
+                f"BO          : {n_episodes} episode(s), {len(bo)} episode-trials, "
+                f"{n_adopt} adopted"
+            )
     scored = df[df["val_logloss"].notna()]
     if len(scored):
         best = scored.loc[scored["val_logloss"].idxmin()]

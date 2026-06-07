@@ -12,7 +12,12 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from logging_lib import record_trial
+from logging_lib import (
+    record_bo_episode_summary,
+    record_bo_trial,
+    record_trial,
+    start_session as write_session_json,
+)
 
 # (commit, family, status, val_logloss, locus, keep_or_discard, surprise)
 _SCRIPT = [
@@ -60,6 +65,111 @@ def build_synthetic_session(logs_dir, results_tsv=None):
             pre_trial_plan=pre, post_trial_reflection=post,
         )
     return len(_SCRIPT)
+
+
+# --- C1 (LLM+BO) synthetic session: agent trials + two sealed BO episodes ----
+
+_TASK_C1 = "credit-g"
+
+# Each episode is a list of (config, val_logloss); the lowest-logloss config is
+# the episode best. Episode 1 is xgboost, episode 2 is random_forest.
+_EPISODE_1 = [
+    ({"n_estimators": 100, "max_depth": 3}, 0.40),
+    ({"n_estimators": 150, "max_depth": 5}, 0.36),
+    ({"n_estimators": 200, "max_depth": 4}, 0.30),  # best
+    ({"n_estimators": 300, "max_depth": 6}, 0.33),
+    ({"n_estimators": 120, "max_depth": 2}, 0.38),
+]
+_EPISODE_2 = [
+    ({"n_estimators": 200, "max_depth": 12}, 0.42),
+    ({"n_estimators": 400, "max_depth": 16}, 0.37),
+    ({"n_estimators": 300, "max_depth": 8}, 0.35),   # best
+    ({"n_estimators": 500, "max_depth": 20}, 0.39),
+    ({"n_estimators": 250, "max_depth": 10}, 0.41),
+]
+
+
+def _summary(family, logloss, i, task=_TASK_C1):
+    return {
+        "val_logloss": logloss, "val_acc": 0.85, "val_auc": 0.91,
+        "train_seconds": 1.0 + i, "total_seconds": 2.0 + i, "peak_mem_mb": 250.0,
+        "model_family": family, "n_params": 1000 * i, "task_name": task,
+    }
+
+
+def build_synthetic_c1_session(logs_dir, results_tsv=None):
+    """Write a 13-trial C1 session: agent trials + two BO episodes, one of which
+    is adopted into a kept agent commit. Returns the number of trials."""
+    logs_dir = str(logs_dir)
+    if results_tsv is None:
+        results_tsv = os.path.join(logs_dir, "results.tsv")
+
+    write_session_json(logs_dir, {
+        "run_id": "synthC1", "branch": "autoresearch/synthC1", "task": _TASK_C1,
+        "arm": "C1", "capabilities": ["bo"], "initial_model": "xgboost",
+        "model_source": "random", "seed": 7, "family_locked": False,
+        "trial_budget": 50, "started_at": "2026-06-07T00:00:00",
+    })
+
+    def ts(i):
+        return f"2026-06-07T00:{i:02d}:00+00:00"
+
+    tid = 0
+
+    # Trial 1: agent xgboost baseline (kept).
+    tid += 1
+    record_trial(
+        commit="agent001", summary=_summary("xgboost", 0.40, tid), status="keep",
+        description="baseline xgboost", hyperparameters={"n_estimators": 120, "max_depth": 3},
+        logs_dir=logs_dir, trial_id=tid, timestamp=ts(tid), results_tsv=results_tsv,
+    )
+
+    # Episode 1 (xgboost), trials 2-6.
+    for idx, (cfg, ll) in enumerate(_EPISODE_1, start=1):
+        tid += 1
+        record_bo_trial(
+            commit="agent001", summary=_summary("xgboost", ll, tid),
+            hyperparameters=cfg, bo_episode_id="bo-ep001", bo_trial_index=idx,
+            logs_dir=logs_dir, trial_id=tid, timestamp=ts(tid),
+        )
+    best1_cfg, best1_ll = min(_EPISODE_1, key=lambda x: x[1])
+    record_bo_episode_summary(
+        commit="agent001", task=_TASK_C1, model_family="xgboost",
+        val_logloss=best1_ll, budget=5, space_keys=["n_estimators", "max_depth"],
+        results_tsv=results_tsv, best_summary=_summary("xgboost", best1_ll, 4),
+    )
+
+    # Trial 7: agent xgboost ADOPTS episode-1 best (kept).
+    tid += 1
+    record_trial(
+        commit="agent007", summary=_summary("xgboost", best1_ll, tid), status="keep",
+        description="adopt bo-ep001 best", hyperparameters=dict(best1_cfg),
+        logs_dir=logs_dir, trial_id=tid, timestamp=ts(tid), results_tsv=results_tsv,
+    )
+
+    # Episode 2 (random_forest), trials 8-12.
+    for idx, (cfg, ll) in enumerate(_EPISODE_2, start=1):
+        tid += 1
+        record_bo_trial(
+            commit="agent007", summary=_summary("random_forest", ll, tid),
+            hyperparameters=cfg, bo_episode_id="bo-ep002", bo_trial_index=idx,
+            logs_dir=logs_dir, trial_id=tid, timestamp=ts(tid),
+        )
+    best2_cfg, best2_ll = min(_EPISODE_2, key=lambda x: x[1])
+    record_bo_episode_summary(
+        commit="agent007", task=_TASK_C1, model_family="random_forest",
+        val_logloss=best2_ll, budget=5, space_keys=["n_estimators", "max_depth"],
+        results_tsv=results_tsv, best_summary=_summary("random_forest", best2_ll, 3),
+    )
+
+    # Trial 13: agent mlp from scratch (not adopted; best overall, kept).
+    tid += 1
+    record_trial(
+        commit="agent013", summary=_summary("mlp", 0.28, tid), status="keep",
+        description="mlp from scratch", hyperparameters={"hidden_sizes": "128,64", "dropout": 0.1},
+        logs_dir=logs_dir, trial_id=tid, timestamp=ts(tid), results_tsv=results_tsv,
+    )
+    return tid
 
 
 def main(argv=None) -> int:
