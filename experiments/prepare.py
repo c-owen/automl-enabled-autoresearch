@@ -7,14 +7,15 @@ scoring function (``evaluate``). The mutable workpiece lives in ``train.py``.
 Usage:
     python -c "from prepare import load_task; print([a.shape for a in load_task()])"
 
-Task data is fetched from a pinned source (UCI) on the first call, cached under
-~/.cache/autoresearch_tabular/<task>/, and served offline thereafter.
+Task data is served **exclusively from the committed ``data/`` directory** — the
+experiments harness never touches the network at load time. Populate ``data/``
+once with ``tools/fetch_datasets.py`` (the only network code in the harness);
+``load_task`` then reads and parses those pinned, checksummed raw files offline.
+A socket-blocking test enforces the no-network guarantee for every task.
 """
 
 import io
 import os
-import pickle
-import urllib.request
 
 import pandas as pd
 from sklearn.metrics import accuracy_score, log_loss, roc_auc_score
@@ -57,12 +58,16 @@ _GERMAN_COLUMNS = [
 
 # Task registry. Each entry is a *pinned, host-agnostic* data source described
 # by a config dict (direct URL + parse options) so load_task is reproducible and
-# not coupled to any one dataset platform (no OpenML). After the first fetch the
-# data is cached locally and never re-downloaded. The three starter tasks vary
-# deliberately in size, feature count, and class balance.
+# not coupled to any one dataset platform (no OpenML). The committed ``data/``
+# directory is the source of truth: ``load_task`` reads ONLY from there and never
+# downloads. ``tools/fetch_datasets.py`` is the one-time, network-touching
+# populater; it verifies each file's bytes against the ``files`` checksum below.
+# The starter tasks vary deliberately in size, feature count, and class balance.
 #
-# Per-entry fields: url, target_col, and optional sep / header / columns /
-# na_values / archive ("zip") / member (zip entry) / target_map (value remap).
+# Per-entry fields: url, files ({on-disk filename: sha256}, the pinned raw
+# download), target_col, and optional sep / header / columns / na_values /
+# archive ("zip") / member (zip entry) / target_map (value remap). The file under
+# ``data/<task>/`` is the basename of ``url``, byte-identical to the pinned fetch.
 _TASK_REGISTRY = {
     # ~32.5k rows, 14 features (8 cat / 6 num), ~24% positive. Comma CSV.
     "adult": {
@@ -70,6 +75,7 @@ _TASK_REGISTRY = {
             "https://archive.ics.uci.edu/ml/machine-learning-databases/"
             "adult/adult.data"
         ),
+        "files": {"adult.data": "5b00264637dbfec36bdeaab5676b0b309ff9eb788d63554ca0a249491c86603d"},
         "header": None,
         "columns": _ADULT_COLUMNS,
         "target_col": "income",
@@ -81,6 +87,7 @@ _TASK_REGISTRY = {
             "https://archive.ics.uci.edu/ml/machine-learning-databases/"
             "statlog/german/german.data"
         ),
+        "files": {"german.data": "b21f3d81db8071257d5ff1deaeba1fd4303b62712e6fcc9715c7a86202cb5871"},
         "sep": r"\s+",
         "header": None,
         "columns": _GERMAN_COLUMNS,
@@ -93,6 +100,7 @@ _TASK_REGISTRY = {
             "https://archive.ics.uci.edu/ml/machine-learning-databases/"
             "00222/bank.zip"
         ),
+        "files": {"bank.zip": "99d7e8eb12401ed278b793984423915411ea8df099e1795f9fefe254f513fe5e"},
         "archive": "zip",
         "member": "bank.csv",
         "sep": ";",
@@ -102,32 +110,54 @@ _TASK_REGISTRY = {
 }
 
 # ---------------------------------------------------------------------------
-# Cache configuration
+# Local data layer (offline-only)
 # ---------------------------------------------------------------------------
 
-CACHE_DIR = os.path.join(
-    os.path.expanduser("~"), ".cache", "autoresearch_tabular"
-)
+# The committed source of truth. Sibling of this file, version-controlled and
+# force-tracked in .gitignore. Never a network cache — see tools/fetch_datasets.py.
+DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
 
 
-def _task_cache_dir(task: str) -> str:
-    return os.path.join(CACHE_DIR, task)
+def _task_data_dir(task: str) -> str:
+    return os.path.join(DATA_DIR, task)
 
 
-def _download_task(task: str):
-    """Fetch a task's full (X, y) from its pinned source and persist to cache.
+def _task_raw_path(task: str) -> str:
+    """Absolute path to ``task``'s committed raw source file under ``data/``.
 
-    Network is only touched here, on a cold cache. Returns (X, y) as a pandas
-    DataFrame and Series. Kept as a separate helper so tests can assert the
-    cached path never reaches the network.
+    Each registered task pins exactly one raw file (the basename of its pinned
+    URL) in its ``files`` registry entry. That file is what ``fetch_datasets.py``
+    downloads and checksums, and what we parse here.
+    """
+    files = _TASK_REGISTRY[task].get("files")
+    if not files:
+        raise ValueError(
+            f"Task {task!r} has no `files` entry in the registry; cannot resolve "
+            "its committed data file."
+        )
+    filename = next(iter(files))
+    return os.path.join(_task_data_dir(task), filename)
+
+
+def _read_raw(task: str):
+    """Parse ``task``'s committed raw file into ``(X, y)`` — strictly offline.
+
+    Reads only from ``data/<task>/`` and never opens a socket. A missing file is
+    an operator error (the harness does not download at load time), so it raises
+    a clear ``FileNotFoundError`` pointing at ``tools/fetch_datasets.py``.
     """
     entry = _TASK_REGISTRY[task]
+    path = _task_raw_path(task)
+    if not os.path.exists(path):
+        raise FileNotFoundError(
+            f"Data file for task {task!r} not found at {path!r}. The experiments "
+            "harness never downloads at load time — populate data/ once with "
+            f"`uv run python tools/fetch_datasets.py --task {task}` (the only "
+            "network-touching code in the harness)."
+        )
 
-    req = urllib.request.Request(
-        entry["url"], headers={"User-Agent": "autoresearch/0.1"}
-    )
-    with urllib.request.urlopen(req, timeout=60) as resp:
-        raw_bytes = resp.read()
+    with open(path, "rb") as fh:
+        raw_bytes = fh.read()
 
     if entry.get("archive") == "zip":
         import zipfile
@@ -151,21 +181,7 @@ def _download_task(task: str):
     if entry.get("target_map"):
         y = y.map(entry["target_map"])
     X = frame.drop(columns=[target])
-
-    cache_dir = _task_cache_dir(task)
-    os.makedirs(cache_dir, exist_ok=True)
-    with open(os.path.join(cache_dir, "Xy.pkl"), "wb") as fh:
-        pickle.dump((X, y), fh)
     return X, y
-
-
-def _load_cached_task(task: str):
-    """Return cached (X, y) for ``task``, downloading on a cache miss."""
-    cache_path = os.path.join(_task_cache_dir(task), "Xy.pkl")
-    if os.path.exists(cache_path):
-        with open(cache_path, "rb") as fh:
-            return pickle.load(fh)
-    return _download_task(task)
 
 
 def load_task(task: str = None):
@@ -185,7 +201,7 @@ def load_task(task: str = None):
         raise ValueError(
             f"Unknown task {task!r}. Registered tasks: {sorted(_TASK_REGISTRY)}"
         )
-    X, y = _load_cached_task(task)
+    X, y = _read_raw(task)
     X_train, X_val, y_train, y_val = train_test_split(
         X, y, test_size=VAL_FRAC, random_state=RANDOM_SEED, stratify=y
     )

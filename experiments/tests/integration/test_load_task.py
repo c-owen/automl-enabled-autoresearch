@@ -1,7 +1,8 @@
-"""Integration tests for load_task — these hit the dataset host on a cold cache.
+"""Integration tests for load_task — strictly offline, from committed ``data/``.
 
-They depend on the ``task_data_available`` fixture, which warms the cache once
-and skips the whole group with a clear reason if the host is unreachable.
+The experiments harness never downloads at load time (Step 2): these parse the
+pinned raw files under ``data/`` directly. The no-network guarantee itself is
+covered by ``tests/unit/test_data_layer.py::test_load_task_offline``.
 """
 
 import pandas as pd
@@ -34,15 +35,3 @@ def test_load_task_deterministic(task_data_available):
     pd.testing.assert_series_equal(yv1, yv2)
 
 
-@pytest.mark.integration
-def test_load_task_caches(task_data_available, monkeypatch):
-    """After the first fetch, load_task serves from cache without downloading."""
-
-    def _boom(task):
-        raise AssertionError("network fetch attempted on a warm cache")
-
-    # Cache is already warm (fixture). Any download attempt now fails loudly;
-    # a cache hit stays silent.
-    monkeypatch.setattr(prepare, "_download_task", _boom)
-    X_train, _, X_val, _ = prepare.load_task()
-    assert len(X_train) > 0 and len(X_val) > 0
