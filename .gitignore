@@ -39,3 +39,22 @@ htmlcov/
 analysis/
 figures/
 archive/
+
+# --- experiments/ (Phase-2 grid harness) ---
+# The run-artifact patterns above are global (no leading slash) and already
+# match experiments/ subpaths (experiments/logs/, experiments/results.tsv,
+# experiments/analysis/, ...). Listed again here, explicitly scoped, so the
+# intent survives if a future edit anchors the global patterns to the repo root.
+experiments/logs/
+experiments/results.tsv
+experiments/analysis/
+experiments/figures/
+experiments/archive/
+experiments/.venv/
+experiments/.pytest_cache/
+# Reference-arm per-run output dirs (Step 9 writes here, never the live session).
+experiments/reference_runs/
+# data/ is the COMMITTED source of truth, not a cache — force it tracked even if
+# a broader ignore is ever introduced above.
+!experiments/data/
+!experiments/data/**
