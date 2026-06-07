@@ -1,0 +1,7 @@
+# Raw dataset files are byte-pinned: their SHA256 is recorded in
+# prepare._TASK_REGISTRY and enforced by test_data_checksums /
+# `fetch_datasets.py --verify-only`. Git must store and check them out VERBATIM —
+# under core.autocrlf=true a text file's LF would become CRLF on checkout, which
+# changes the bytes and breaks every checksum on a fresh clone. Mark the whole
+# committed data layer binary so no EOL (or any) conversion is ever applied.
+data/** binary
