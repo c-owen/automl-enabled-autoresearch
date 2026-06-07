@@ -45,15 +45,18 @@ xgboost · random_forest · logistic_regression · mlp
 
 ### Tasks
 
-Data is fetched from pinned, **host-agnostic** direct URLs and cached locally
-(no dependence on any single dataset platform). Switch tasks via the
-`AUTORESEARCH_TASK` env var:
+Data is **committed under `data/`** and served fully offline — `load_task` never
+touches the network (a socket-blocking test enforces this). Each file is pinned
+by SHA256; `tools/fetch_datasets.py` is the one-time populater. Switch tasks via
+`start_session --task` (or the `AUTORESEARCH_TASK` env var).
 
-| task             | rows   | features      | positive rate |
-|------------------|--------|---------------|---------------|
-| `adult` (default)| ~32.5k | 8 cat / 6 num | ~24%          |
-| `credit-g`       | 1k     | 13 cat / 7 num| 30%           |
-| `bank-marketing` | 4.5k   | 10 cat / 6 num| ~11.5%        |
+| task             | rows   | features | classes | role |
+|------------------|--------|----------|---------|------|
+| `electricity`    | 45,312 | 8        | 2       | GBDT-friendly anchor |
+| `adult` (default)| ~32.5k | 14       | 2       | imbalanced binary |
+| `credit-g`       | 1,000  | 20       | 2       | small, hard-for-GBDT |
+| `balance-scale`  | 625    | 4        | 3       | tiny, multiclass |
+| `cnae-9`         | 1,080  | 856      | 9       | high-dim, multiclass |
 
 ## Quick start
 
@@ -63,19 +66,24 @@ Data is fetched from pinned, **host-agnostic** direct URLs and cached locally
 # 1. Install dependencies
 uv sync
 
-# 2. Verify the harness (first call fetches + caches the task)
-uv run python -c "from prepare import load_task; print([a.shape for a in load_task()])"
+# 2. Verify the committed data layer (offline; checksums every task)
+uv run python tools/fetch_datasets.py --verify-only
 
-# 3. Run a single trial end-to-end (records it to the ledger)
+# 3. Start a session with an arm, then run a single trial
+uv run python tools/start_session.py --arm C0 --task credit-g --no-branch
 uv run python run_trial.py
 ```
 
-## Running the agent
+## Running the grid
 
-Point your coding agent at `program.md` and let it run the trial loop. Each
-trial: write a pre-trial plan, edit `train.py`, commit, run
-`uv run python run_trial.py`, write a post-trial reflection, then keep (advance
-the branch) or `git reset --hard` (discard).
+This harness runs four arms (see `OPERATING.md`): **C0** (LLM-only), **C1**
+(LLM + the `run_bo` BO tool), and the scripted references **R1** (TPE) / **R2**
+(random). A human starts an LLM session with `tools/start_session.py --arm
+C0|C1`, which generates `program.md` for that arm and stamps the arm into
+`session.json`. The agent reads `program.md` and runs the trial loop: edit
+`train.py`, commit, `uv run python run_trial.py`, then keep (advance the branch)
+or `git reset --hard` (discard). In C1 it may also call
+`tools/run_bo.py` for a sealed Bayesian-optimization episode.
 
 ## What gets logged
 
@@ -116,14 +124,19 @@ uv run pytest -m smoke        # the end-to-end mini-session
 ## Project structure
 
 ```
-prepare.py        — locked harness: load_task, evaluate, task registry (do not modify)
-logging_lib.py    — locked ledger: print-contract parse, JSONL/TSV writes, decisions (do not modify)
+prepare.py        — locked harness: load_task (offline), evaluate, task registry (do not modify)
+logging_lib.py    — locked ledger: print-contract parse, JSONL/TSV writes, BO/reference rows (do not modify)
+family_adapters.py— locked: typed config -> fitted model per family (shared measurement plumbing)
+arms.py           — arm/capability registry + playbook generation (C0/C1)
 train.py          — the mutable workpiece (agent edits this)
 run_trial.py      — trial wrapper that records to the ledger
-program.md        — the agent playbook
-tools/            — validate_jsonl, extract_decisions, record_decision, smoke_test, ...
-tests/            — unit + integration; family baselines under tests/fixtures/
-analysis.ipynb    — session visualization
+program.md        — the agent playbook (generated per session by start_session)
+playbook/         — base.md + sections/ (the source program.md is generated from)
+data/             — committed, checksummed task data (offline source of truth)
+tools/            — start_session, run_bo, run_reference[_batch], fetch_datasets,
+                    compute_penalties, check_ceiling, ingest/extract, metrics, smoke_test, ...
+tests/            — unit + integration (+ smoke); family baselines under tests/fixtures/
+analysis.ipynb    — session visualization (progress, AUBC, BO engagement)
 ```
 
 ## License
