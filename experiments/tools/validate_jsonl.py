@@ -16,7 +16,7 @@ import sys
 # script's own dir (tools/) lands on sys.path, not the repo root, so add it.
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from logging_lib import SCHEMA_VERSION, VALID_STATUSES
+from logging_lib import ALL_STATUSES, KNOWN_SCHEMA_VERSIONS, VALID_SOURCES
 
 _NUMBER = (int, float)
 
@@ -60,12 +60,29 @@ def validate_run_row(row) -> list:
                 f"key {key!r} has type {type(value).__name__}, expected {type_names}"
             )
 
-    if row.get("schema_version") not in (None, SCHEMA_VERSION):
+    if row.get("schema_version") not in (None,) + KNOWN_SCHEMA_VERSIONS:
         errors.append(
-            f"schema_version {row.get('schema_version')!r} != {SCHEMA_VERSION}"
+            f"schema_version {row.get('schema_version')!r} not in "
+            f"{KNOWN_SCHEMA_VERSIONS}"
         )
-    if isinstance(row.get("status"), str) and row["status"] not in VALID_STATUSES:
-        errors.append(f"status {row['status']!r} not in {VALID_STATUSES}")
+    if isinstance(row.get("status"), str) and row["status"] not in ALL_STATUSES:
+        errors.append(f"status {row['status']!r} not in {ALL_STATUSES}")
+
+    # v2 provenance fields are optional (absent on v1 rows); validate when present.
+    if "source" in row and row["source"] not in VALID_SOURCES:
+        errors.append(f"source {row['source']!r} not in {VALID_SOURCES}")
+    episode_id = row.get("bo_episode_id")
+    if "bo_episode_id" in row and episode_id is not None and not isinstance(episode_id, str):
+        errors.append(
+            f"bo_episode_id has type {type(episode_id).__name__}, expected str/null"
+        )
+    trial_index = row.get("bo_trial_index")
+    if "bo_trial_index" in row and trial_index is not None and (
+        isinstance(trial_index, bool) or not isinstance(trial_index, int)
+    ):
+        errors.append(
+            f"bo_trial_index has type {type(trial_index).__name__}, expected int/null"
+        )
     return errors
 
 

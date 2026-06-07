@@ -20,7 +20,11 @@ import shutil
 import tempfile
 from datetime import datetime, timezone
 
-SCHEMA_VERSION = 1
+# v2 (Step 6): runs.jsonl rows gain source / bo_episode_id / bo_trial_index to
+# distinguish agent trials from BO-episode trials (protocol §3.5). v1 ledgers
+# from archived sessions remain valid (forward-compat) — see KNOWN_SCHEMA_VERSIONS.
+SCHEMA_VERSION = 2
+KNOWN_SCHEMA_VERSIONS = (1, 2)
 
 # The print contract emitted at the end of every trial (see tabular_port_plan
 # section 3.2). Maps each required key to a coercion callable.
@@ -36,7 +40,19 @@ _SUMMARY_FIELDS = {
     "task_name": str,
 }
 
+# Agent-trial statuses (what an agent trial row may carry; build_run_row guards
+# this strictly). BO rows use their own statuses: each episode trial row is
+# "bo_trial" in runs.jsonl, and the single results.tsv episode summary is
+# "bo_episode". ALL_STATUSES is what the ledger validator accepts.
 VALID_STATUSES = ("keep", "discard", "crash")
+BO_STATUSES = ("bo_trial", "bo_episode")
+ALL_STATUSES = VALID_STATUSES + BO_STATUSES
+
+# Source of a runs.jsonl row (protocol §3.5). Absent on v1 rows (treated as
+# "agent" by readers).
+SOURCE_AGENT = "agent"
+SOURCE_BO = "bo"
+VALID_SOURCES = (SOURCE_AGENT, SOURCE_BO)
 
 # Decision-record vocabulary (program.md "Decision capture").
 LOCUS_VALUES = (
@@ -213,6 +229,43 @@ def build_run_row(commit, summary, status, description, hyperparameters,
         "n_params": summary.get("n_params"),
         "status": status,
         "description": description,
+        # v2 provenance: an ordinary agent trial.
+        "source": SOURCE_AGENT,
+        "bo_episode_id": None,
+        "bo_trial_index": None,
+    }
+
+
+def build_bo_run_row(commit, summary, hyperparameters, bo_episode_id,
+                     bo_trial_index, trial_id, timestamp) -> dict:
+    """Assemble a runs.jsonl row for a single BO-episode trial (protocol §3.5).
+
+    Same measured fields as an agent row (``summary`` is the adapter trial's
+    metrics, identical in shape to ``parse_summary_block``'s output), but tagged
+    ``source="bo"`` / ``status="bo_trial"`` and carrying the episode id and the
+    trial's index within the episode. ``commit`` is HEAD at the invocation; there
+    is no per-trial commit association beyond that.
+    """
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "trial_id": trial_id,
+        "commit": commit,
+        "timestamp": timestamp,
+        "task": summary["task_name"],
+        "model_family": summary["model_family"],
+        "hyperparameters": dict(hyperparameters or {}),
+        "val_logloss": summary["val_logloss"],
+        "val_acc": summary["val_acc"],
+        "val_auc": summary["val_auc"],
+        "train_seconds": summary["train_seconds"],
+        "total_seconds": summary["total_seconds"],
+        "peak_mem_mb": summary["peak_mem_mb"],
+        "n_params": summary.get("n_params"),
+        "status": "bo_trial",
+        "description": f"bo episode {bo_episode_id} trial {bo_trial_index}",
+        "source": SOURCE_BO,
+        "bo_episode_id": bo_episode_id,
+        "bo_trial_index": bo_trial_index,
     }
 
 
@@ -266,6 +319,67 @@ def record_trial(commit, summary, status, description, hyperparameters,
         # Guarantee the file exists even if the wrapper didn't tee stdout.
         open(dest_log, "a", encoding="utf-8").close()
 
+    return row
+
+
+# ---------------------------------------------------------------------------
+# BO-episode recording (protocol §3.5)
+# ---------------------------------------------------------------------------
+
+def record_bo_trial(commit, summary, hyperparameters, bo_episode_id,
+                    bo_trial_index, logs_dir, trial_id=None, timestamp=None) -> dict:
+    """Append ONE BO-episode trial row to runs.jsonl (and nothing else).
+
+    Unlike ``record_trial``, a BO trial writes no results.tsv row and no
+    per-trial run log: results.tsv gets a single episode-summary row (see
+    ``record_bo_episode_summary``) and the full episode stdout goes to
+    ``logs/runs/<episode_id>.log`` (written by the BO tool). Episode trials draw
+    1:1 from TRIAL_BUDGET, so they take a sequential ``trial_id`` like any trial.
+
+    Returns the runs.jsonl row that was written.
+    """
+    logs_dir = str(logs_dir)
+    runs_jsonl = os.path.join(logs_dir, "runs.jsonl")
+
+    if trial_id is None:
+        trial_id = _next_trial_id(runs_jsonl)
+    if timestamp is None:
+        timestamp = datetime.now(timezone.utc).isoformat()
+
+    row = build_bo_run_row(
+        commit, summary, hyperparameters, bo_episode_id, bo_trial_index,
+        trial_id, timestamp,
+    )
+    append_run_row(runs_jsonl, row)
+    return row
+
+
+def record_bo_episode_summary(commit, task, model_family, val_logloss, budget,
+                              space_keys, results_tsv="results.tsv",
+                              best_summary=None) -> dict:
+    """Append the SINGLE human-scannable results.tsv row for a BO episode.
+
+    One row per episode (not one per trial): ``status="bo_episode"``,
+    ``model_family`` = the episode's family, ``val_logloss`` = the episode best,
+    auto description ``bo n=<budget> space=<declared space keys>``. The acc/auc/
+    mem/seconds columns are filled from ``best_summary`` (the episode-best trial's
+    metrics) when provided, else left blank.
+    """
+    best = best_summary or {}
+    description = f"bo n={budget} space={','.join(space_keys)}"
+    row = {
+        "commit": commit,
+        "task": task,
+        "model_family": model_family,
+        "val_logloss": val_logloss,
+        "val_acc": best.get("val_acc", ""),
+        "val_auc": best.get("val_auc", ""),
+        "peak_mem_mb": best.get("peak_mem_mb", ""),
+        "total_seconds": best.get("total_seconds", ""),
+        "status": "bo_episode",
+        "description": description,
+    }
+    _append_tsv_row(results_tsv, row)
     return row
 
 
