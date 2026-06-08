@@ -82,8 +82,10 @@ This harness runs four arms (see `OPERATING.md`): **C0** (LLM-only), **C1**
 C0|C1`, which generates `program.md` for that arm and stamps the arm into
 `session.json`. The agent reads `program.md` and runs the trial loop: edit
 `train.py`, commit, `uv run python run_trial.py`, then keep (advance the branch)
-or `git reset --hard` (discard). In C1 it may also call
-`tools/run_bo.py` for a sealed Bayesian-optimization episode.
+or `git reset --hard` (discard). In C1 the playbook (protocol v1.1) mandates one
+sealed `tools/run_bo.py` BO episode on entering a new family; the tool validates
+the declared search box against the adapter specs pre-flight (`--specs <family>`
+shows the legal box). All families are held to their canonical estimator class.
 
 ## What gets logged
 

@@ -130,26 +130,29 @@ uv run python tools/run_bo.py --family xgboost --budget 10 --space '<json>'
 The agent declares **one model family**, a **bounded box** of hyperparameters to
 search, and a **sub-budget** of 5–15 trials. The tool then runs a *sealed* TPE
 optimization episode inside that box — the agent is not in the loop — and prints
-the best configuration it found, its `val_logloss`, and the full per-trial trace.
-Key design points:
+the best configuration it found, its `val_logloss`, the full per-trial trace, the
+**pinned defaults** for any parameter it didn't declare, and a caveat that episode
+scores use the harness's fixed preprocessing (re-measure on adoption). Key design
+points:
 
 - **The agent makes the macro decisions** (which family, which knobs, how long to
   commit); the BO does the micro-refinement it's good at. There is no automatic
   optimizer-led control — BO only ever runs inside a box the agent explicitly
   opened.
 - **The episode's trials count against the same 50-trial budget** as the agent's
-  own trials. How much budget the agent chooses to spend on the tool is itself a
-  measurement.
+  own trials. How much budget the agent spends on the tool is itself a measurement.
 - **Measurement is identical to a hand trial** — same data split, same metric,
   same preprocessing (via the adapters).
 - **It is robust.** Each trial fits in a worker subprocess under the standard
-  5-minute watchdog, so a hang, crash, or invalid config penalizes only that one
-  trial and the episode keeps going.
-- **Constraint violations cost nothing** — a bad family, an out-of-range budget,
-  an unknown hyperparameter, or malformed JSON is refused with a clear error and
-  **zero trials consumed**.
-- **It's arm-gated** — in a C0 session the tool refuses to run (the arm doesn't
-  enable it).
+  5-minute watchdog, so a hang or crash penalizes only that one trial and the
+  episode keeps going.
+- **The box is validated pre-flight (v1.1).** A bad family, out-of-range budget,
+  unknown hyperparameter, malformed JSON, **or a declared bound/choice outside the
+  adapter's legal range** is refused with a clear error and **zero trials**. The
+  refusal prints the legal specs, and `run_bo.py --specs <family>` prints them on
+  demand — so an invalid call teaches the agent the legal box for free. (This fixes
+  the v1.0 pilot, where an out-of-spec box silently burned 5 of 10 trials.)
+- **It's arm-gated** — in a C0 session the tool refuses to run.
 
 What the agent does with the result is its own call: adopt the configuration
 (edit `train.py`, commit, run a normal trial) or reject it and move on.
@@ -164,6 +167,14 @@ is added. A test asserts the two are identical except for that one section — t
 is the "single difference" control, written as executable code. (Because
 `program.md` is generated, it is gitignored; the committed source is
 `playbook/`.)
+
+The **BO section is prescriptive at family entry (v1.1)**: it mandates the
+baseline-trial-then-one-episode routine whenever the agent enters a family it
+hasn't tuned this session (including its assigned start), and is neutral about use
+beyond that. So C1 measures *utility at cold-start entry* (where engagement is
+guaranteed); voluntary use beyond the mandate is the residual uptake signal. The
+**base** playbook (both arms, not part of the C0/C1 delta) also states the
+family-integrity rule — each family means its canonical estimator class.
 
 The starting model family for each run is chosen deterministically from
 `(seed, task)` — **never** the arm — so C0 and C1 launched with the same seed and
@@ -352,8 +363,11 @@ the trial budget.
 to avoid contamination between grid cells). Paste the printed prompt. The agent
 will read `program.md`, write a baseline `train.py` for the assigned family, and
 begin the trial loop on its own: edit → commit → `uv run python run_trial.py` →
-keep or `git reset --hard`. In a **C1** session it may also call
-`tools/run_bo.py` whenever it decides to. You don't intervene — just let it run.
+keep or `git reset --hard`. In a **C1** session the playbook (v1.1) directs it to
+run one BO episode whenever it enters a new family (after a baseline trial), and
+it may call `tools/run_bo.py` freely beyond that; it can check a family's legal
+search box with `run_bo.py --specs <family>`. You don't intervene — just let it
+run. (The agent drives the tool; you only start and end the session.)
 
 **Step 3 — let it run to budget.** The agent stops itself at 50 trials. You can
 peek anytime: `results.tsv` and `logs/runs.jsonl` update per trial. (If the agent

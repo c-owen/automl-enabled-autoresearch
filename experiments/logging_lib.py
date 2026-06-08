@@ -57,6 +57,39 @@ SOURCE_BO = "bo"
 SOURCE_REFERENCE = "reference"
 VALID_SOURCES = (SOURCE_AGENT, SOURCE_BO, SOURCE_REFERENCE)
 
+# Family integrity (protocol §9, v1.1): each family means its canonical estimator
+# class. xgboost -> XGBClassifier, random_forest -> RandomForestClassifier,
+# logistic_regression -> LogisticRegression. mlp is "the torch net in train.py" —
+# no single canonical sklearn class, so it is judged only by NOT impersonating
+# another family's estimator. Substitutes (ExtraTrees, HistGradientBoosting, ...)
+# are violations. Enforced at the end of train.py and validated by ingest via the
+# print-contract `estimator_class` field.
+CANONICAL_ESTIMATOR_CLASS = {
+    "xgboost": "XGBClassifier",
+    "random_forest": "RandomForestClassifier",
+    "logistic_regression": "LogisticRegression",
+    "mlp": None,
+}
+
+
+def family_violation(family, estimator_class) -> bool:
+    """True if ``estimator_class`` is not the canonical estimator for ``family``.
+
+    Returns False when ``estimator_class`` is missing (v1.0 archives) or the family
+    is unknown — those simply can't be judged. For ``mlp`` (no single canonical
+    class), only impersonating another family's canonical estimator is a violation.
+    """
+    if not estimator_class:
+        return False
+    if family not in CANONICAL_ESTIMATOR_CLASS:
+        return False
+    canonical = CANONICAL_ESTIMATOR_CLASS[family]
+    if canonical is not None:
+        return estimator_class != canonical
+    others = {c for f, c in CANONICAL_ESTIMATOR_CLASS.items()
+              if f != family and c is not None}
+    return estimator_class in others
+
 # Decision-record vocabulary (program.md "Decision capture").
 LOCUS_VALUES = (
     "hyperparameter", "preprocessing", "model_family", "architecture",
@@ -236,6 +269,9 @@ def build_run_row(commit, summary, status, description, hyperparameters,
         "source": SOURCE_AGENT,
         "bo_episode_id": None,
         "bo_trial_index": None,
+        # Family integrity (v1.1): the fitted estimator's class, for ingest to
+        # validate against the family. Optional — absent on v1.0 archives.
+        "estimator_class": summary.get("estimator_class"),
     }
 
 

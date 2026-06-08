@@ -86,18 +86,29 @@ def test_bo_allowed_in_C1_session(tmp_path):
 
 
 @pytest.mark.integration
-def test_bo_failure_penalty(tmp_path):
-    # A box whose values all exceed PARAM_SPECS (max_depth high is 12): every
-    # build() raises AdapterError -> each trial takes the penalty, episode finishes.
+def test_bo_summary_discloses_pinned_defaults(tmp_path, capsys):
+    """A2: the episode summary lists pinned defaults for undeclared params + caveat."""
+    logs = _new_session(tmp_path)
+    # Declare only learning_rate -> max_depth (xgboost default 6) is pinned.
+    space = {"learning_rate": {"type": "float", "low": 0.02, "high": 0.3, "log": True}}
+    plan = run_bo.plan_episode(str(logs), "xgboost", 5, space)
+    result = run_bo.execute_episode(plan, "xgboost", 5, str(logs),
+                                    str(tmp_path / "results.tsv"), commit="cafe123")
+    run_bo._print_agent_summary(result, "xgboost", plan["task"])
+    out = capsys.readouterr().out
+    assert "max_depth = 6" in out   # pinned default disclosed
+    assert "preprocessing" in out   # the comparability caveat
+
+
+@pytest.mark.integration
+def test_bo_out_of_spec_box_refused(tmp_path):
+    """v1.1 (A1): an out-of-spec box is refused PRE-FLIGHT with zero trials — it
+    is no longer accepted and run with penalty trials. (max_depth spec high is 12.)"""
+    logs = _new_session(tmp_path)
     bad_space = {"max_depth": {"type": "int", "low": 50, "high": 60}}
-    logs, rows = _run(tmp_path, space=bad_space)
-    penalty = prepare._TASK_REGISTRY["balance-scale"]["penalty_logloss"]
-    assert len(rows) == 5
-    assert all(r["val_logloss"] == penalty for r in rows)
-    assert all(r["status"] == "bo_trial" for r in rows)
-    # The episode still emitted its single summary row.
-    tsv = (logs.parent / "results.tsv").read_text(encoding="utf-8").splitlines()
-    assert sum("bo_episode" in ln for ln in tsv) == 1
+    with pytest.raises(run_bo.BORefusal, match="outside the adapter"):
+        run_bo.plan_episode(str(logs), "xgboost", 5, bad_space)
+    assert not (logs / "runs.jsonl").exists()
 
 
 @pytest.mark.integration

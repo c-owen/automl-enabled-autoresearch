@@ -44,6 +44,14 @@ the assigned family — written from your own knowledge — *before* your first
 trial. There is no reference/`examples` directory to copy from. Switching
 families later is a normal move in the search.
 
+**Family integrity.** Each family means its canonical estimator class:
+`xgboost` → `XGBClassifier`, `random_forest` → `RandomForestClassifier`,
+`logistic_regression` → scikit-learn `LogisticRegression`, `mlp` → a torch
+neural net. Substitutes — `ExtraTreesClassifier`, `HistGradientBoostingClassifier`,
+`MLPClassifier` for a tree family, etc. — are **not** allowed, even if `MODEL`
+still names the family. `train.py` checks the fitted estimator's class at the end
+and exits non-zero on a mismatch; keep that check when you rewrite the file.
+
 ## What is fair game
 
 - **Hyperparameters** — all of them.

@@ -20,13 +20,17 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import pandas as pd
 
+from logging_lib import family_violation
+
 COLUMNS = [
     "trial_id", "commit", "timestamp", "task", "model_family",
-    "source", "bo_episode_id",
+    "source", "bo_episode_id", "episode_kind",
     "family_changed_from_prior", "locus_of_change", "intent",
     "val_logloss", "val_logloss_delta_from_parent", "status",
     "keep_or_discard", "reason", "surprise", "hyperparameters_json",
     "diff_size_lines", "kept_on_branch", "adopted_from_episode",
+    "estimator_class", "family_violation",
+    "entry_baseline_logloss", "episode_best_logloss", "entry_contrast",
 ]
 
 
@@ -176,6 +180,74 @@ def _adoption_ids(runs, kept_lookup):
     return adopted
 
 
+def _finite(v):
+    return v is not None and not (isinstance(v, float) and math.isnan(v))
+
+
+def _classify_episodes(runs):
+    """Classify each BO episode `entry` vs `voluntary` and derive the per-entry
+    contrast (protocol §6.3, v1.1).
+
+    An episode is `entry` (mandated by the §3.7 family-entry rule) iff it is the
+    first episode in its family this session AND the agent had at most a baseline
+    trial in that family before it. All other episodes are `voluntary`. For an
+    entry episode the contrast is episode-best minus the family's entry baseline
+    trial (the agent trial in that family immediately before the episode);
+    negative means the episode improved on the cold-start baseline.
+
+    Returns ``{episode_id: {episode_kind, entry_baseline_logloss,
+    episode_best_logloss, entry_contrast}}``.
+    """
+    spans = {}
+    for run in runs:
+        if run.get("source") != "bo":
+            continue
+        eid = run.get("bo_episode_id")
+        if not eid:
+            continue
+        tid = run.get("trial_id") or 0
+        ll = run.get("val_logloss")
+        s = spans.setdefault(eid, {"family": run.get("model_family"),
+                                   "first": tid, "best": float("inf")})
+        s["first"] = min(s["first"], tid)
+        if _finite(ll) and ll < s["best"]:
+            s["best"] = ll
+
+    agent_by_family = {}
+    for run in runs:
+        if run.get("source", "agent") != "agent":
+            continue
+        agent_by_family.setdefault(run.get("model_family"), []).append(
+            (run.get("trial_id") or 0, run.get("val_logloss"))
+        )
+
+    meta = {}
+    seen_family = set()
+    for eid in sorted(spans, key=lambda e: spans[e]["first"]):
+        s = spans[eid]
+        fam, first = s["family"], s["first"]
+        prior = [(t, ll) for t, ll in agent_by_family.get(fam, []) if t < first]
+        is_entry = (fam not in seen_family) and (len(prior) <= 1)
+        seen_family.add(fam)
+
+        baseline_ll = None
+        if is_entry:
+            scored = [(t, ll) for t, ll in prior if _finite(ll)]
+            if scored:
+                baseline_ll = max(scored, key=lambda x: x[0])[1]
+        best_ll = s["best"] if s["best"] != float("inf") else None
+        contrast = (best_ll - baseline_ll
+                    if (is_entry and baseline_ll is not None and best_ll is not None)
+                    else None)
+        meta[eid] = {
+            "episode_kind": "entry" if is_entry else "voluntary",
+            "entry_baseline_logloss": baseline_ll,
+            "episode_best_logloss": best_ll,
+            "entry_contrast": contrast,
+        }
+    return meta
+
+
 def extract_decisions(logs_dir, repo_dir=None, head="HEAD"):
     """Return a per-trial DataFrame joining runs + decisions (+ git).
 
@@ -198,6 +270,7 @@ def extract_decisions(logs_dir, repo_dir=None, head="HEAD"):
         return run.get("status") == "keep"
 
     adoptions = _adoption_ids(runs, _kept)
+    episode_meta = _classify_episodes(runs)
 
     records = []
     prev_family = None
@@ -222,11 +295,24 @@ def extract_decisions(logs_dir, repo_dir=None, head="HEAD"):
         else:
             delta = logloss - prev_logloss
 
+        source = run.get("source", "agent")
+
         # Subjective fields: explicit decision record wins, else derive.
         locus = decision.get("locus_of_change") or _derive_locus(family_changed, hp_changed)
-        intent = decision.get("intent")
-        if intent is None and repo_dir:
-            intent = _git_commit_subject(repo_dir, run.get("commit"))
+        # Intent: BO-episode rows carry NULL intent (v1.1) — never the HEAD commit's
+        # message. For agent rows, an explicit record wins, else the commit subject.
+        if source == "bo":
+            intent = None
+        else:
+            intent = decision.get("intent")
+            if intent is None and repo_dir:
+                intent = _git_commit_subject(repo_dir, run.get("commit"))
+
+        ep = episode_meta.get(run.get("bo_episode_id"), {}) if source == "bo" else {}
+        # Family integrity: only agent rows are judged (bo/reference are adapter-built).
+        estimator_class = run.get("estimator_class")
+        violation = (family_violation(family, estimator_class)
+                     if source == "agent" else False)
 
         records.append({
             "trial_id": run.get("trial_id"),
@@ -234,8 +320,9 @@ def extract_decisions(logs_dir, repo_dir=None, head="HEAD"):
             "timestamp": run.get("timestamp"),
             "task": run.get("task"),
             "model_family": family,
-            "source": run.get("source", "agent"),
+            "source": source,
             "bo_episode_id": run.get("bo_episode_id"),
+            "episode_kind": ep.get("episode_kind"),
             "adopted_from_episode": run.get("trial_id") in adoptions,
             "family_changed_from_prior": family_changed,
             "locus_of_change": locus,
@@ -253,6 +340,11 @@ def extract_decisions(logs_dir, repo_dir=None, head="HEAD"):
             "kept_on_branch": (
                 _is_kept_on_branch(repo_dir, run.get("commit"), head) if repo_dir else None
             ),
+            "estimator_class": estimator_class,
+            "family_violation": violation,
+            "entry_baseline_logloss": ep.get("entry_baseline_logloss"),
+            "episode_best_logloss": ep.get("episode_best_logloss"),
+            "entry_contrast": ep.get("entry_contrast"),
         })
         prev_family = family
         # Track the parent score/HP from the previous trial that wasn't a crash.

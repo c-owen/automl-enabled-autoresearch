@@ -54,17 +54,29 @@ Run modes (`--lock`, `--model`) work as before; see the command reference.
 ## 2. Let the agent work
 
 Paste the printed one-liner to a fresh agent. It reads `program.md`, starts from
-the assigned family, and runs the trial loop to `TRIAL_BUDGET`. In **C1** it may
-call the BO tool whenever it likes:
+the assigned family, and runs the trial loop to `TRIAL_BUDGET`. Under **C1** the
+playbook (protocol v1.1) **mandates the entry routine**: on entering a family it
+hasn't tuned this session (including its assigned start) the agent runs one
+baseline trial, then one BO episode, before hand-tuning. Beyond that the tool is
+optional:
 
 ```bash
+uv run python tools/run_bo.py --specs <family>                      # see the legal box first
 uv run python tools/run_bo.py --family xgboost --budget 10 --space '<json>'
 ```
 
 The tool runs a sealed TPE episode inside the declared box (5–15 trials, drawn
-from the session budget), prints the best config + trace, and tags the trials
-`source="bo"` in the ledger. Constraint violations are refused with zero trials.
-In a **C0** session the tool refuses (the arm doesn't enable it).
+from the session budget), prints the best config + trace + the **pinned defaults**
+for undeclared params + a preprocessing caveat, and tags the trials `source="bo"`.
+Boxes are validated against the adapter's `PARAM_SPECS` **pre-flight** (v1.1): an
+unknown key or an out-of-range bound/choice is refused with zero trials and the
+message prints the legal specs. In a **C0** session the tool refuses entirely.
+
+**Family integrity (both arms).** Each family means its canonical estimator class
+(`xgboost`→`XGBClassifier`, `random_forest`→`RandomForestClassifier`,
+`logistic_regression`→`LogisticRegression`, `mlp`→a torch net). `train.py` exits
+non-zero on a substitute (ExtraTrees, HistGradientBoosting, ...), and ingest flags
+any slip as `family_violation`.
 
 ## 3. Reference runs (R1 / R2)
 
@@ -135,7 +147,8 @@ reproducibility. `end_session.py` returns to `main` by default (`--base` to
 override, `--stay` to remain on the run branch).
 
 ### `tools/run_bo.py` (C1 only)
-`--family`, `--budget` (5–15), `--space '<json>'`, `--logs-dir`, `--results-tsv`.
+`--family`, `--budget` (5–15), `--space '<json>'`, `--logs-dir`, `--results-tsv`;
+`--specs <family>` prints the legal box + pinned defaults and exits (no session).
 
 ### `tools/run_reference.py` / `run_reference_batch.py`
 `--method tpe|random`, `--task`, `--seed`/`--seeds`, `--trials` (default 50),

@@ -172,6 +172,59 @@ def build_synthetic_c1_session(logs_dir, results_tsv=None):
     return tid
 
 
+def build_synthetic_c1_entry_voluntary(logs_dir, results_tsv=None):
+    """C1 session with one ENTRY episode and one VOLUNTARY episode (protocol §6.3).
+
+    Episode 1 (xgboost) follows a single baseline -> entry. Episode 2 (xgboost,
+    after further hand-tuning) is a second episode in the same family -> voluntary.
+    Includes an estimator_class on agent rows so family-integrity ingest is also
+    exercised (all compliant here). Returns the trial count (9)."""
+    logs_dir = str(logs_dir)
+    if results_tsv is None:
+        results_tsv = os.path.join(logs_dir, "results.tsv")
+
+    write_session_json(logs_dir, {
+        "run_id": "synthEV", "branch": "autoresearch/synthEV", "task": _TASK_C1,
+        "arm": "C1", "capabilities": ["bo"], "initial_model": "xgboost",
+        "model_source": "random", "seed": 1, "family_locked": False,
+        "trial_budget": 50, "started_at": "2026-06-07T00:00:00",
+    })
+
+    def ts(i):
+        return f"2026-06-07T00:{i:02d}:00+00:00"
+
+    def agent(tid, ll, desc):
+        s = _summary("xgboost", ll, tid)
+        s["estimator_class"] = "XGBClassifier"
+        record_trial(commit=f"ev{tid:03d}", summary=s, status="keep",
+                     description=desc, hyperparameters={"max_depth": 4 + tid},
+                     logs_dir=logs_dir, trial_id=tid, timestamp=ts(tid),
+                     results_tsv=results_tsv)
+
+    def episode(eid, first_tid, configs):
+        for idx, (cfg, ll) in enumerate(configs, start=1):
+            record_bo_trial(commit=f"ev{first_tid - 1:03d}",
+                            summary=_summary("xgboost", ll, first_tid + idx - 1),
+                            hyperparameters=cfg, bo_episode_id=eid,
+                            bo_trial_index=idx, logs_dir=logs_dir,
+                            trial_id=first_tid + idx - 1, timestamp=ts(first_tid + idx - 1))
+        best_cfg, best_ll = min(configs, key=lambda x: x[1])
+        record_bo_episode_summary(commit=f"ev{first_tid - 1:03d}", task=_TASK_C1,
+                                  model_family="xgboost", val_logloss=best_ll,
+                                  budget=len(configs), space_keys=["max_depth"],
+                                  results_tsv=results_tsv,
+                                  best_summary=_summary("xgboost", best_ll, first_tid))
+
+    agent(1, 0.50, "baseline xgboost")                       # entry baseline
+    episode("bo-ep001", 2, [({"max_depth": 3}, 0.46), ({"max_depth": 4}, 0.40),
+                            ({"max_depth": 5}, 0.43)])        # ENTRY (best 0.40)
+    agent(5, 0.42, "hand-tune xgboost")
+    agent(6, 0.41, "hand-tune xgboost")
+    episode("bo-ep002", 7, [({"max_depth": 4}, 0.44), ({"max_depth": 6}, 0.43),
+                            ({"max_depth": 3}, 0.45)])        # VOLUNTARY
+    return 9
+
+
 def main(argv=None) -> int:
     argv = sys.argv[1:] if argv is None else argv
     logs_dir = argv[0] if len(argv) >= 1 else "logs"

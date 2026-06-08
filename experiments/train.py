@@ -5,6 +5,10 @@ model family, tune hyperparameters, change preprocessing — all fair game. The
 only contracts are:
     1. MODEL must be in ALLOWED_FAMILIES.
     2. The script must end with the parseable `---` summary block + END_OF_TRIAL.
+    3. Family integrity (protocol §9): the fitted estimator must be the family's
+       canonical class (xgboost -> XGBClassifier, random_forest ->
+       RandomForestClassifier, logistic_regression -> LogisticRegression, mlp -> a
+       torch net). The end-of-script check enforces this — keep it when you rewrite.
 
 Run a trial via the wrapper (records it):  uv run python run_trial.py
 (Running `python train.py` directly just prints the summary; nothing is logged.)
@@ -22,7 +26,7 @@ from prepare import (
     evaluate,
     load_task,
 )
-from logging_lib import peak_rss_mb
+from logging_lib import family_violation, peak_rss_mb
 
 # ---------------------------------------------------------------------------
 # Constants (the LLM tunes these)
@@ -110,6 +114,19 @@ def main():
     total_seconds = time.perf_counter() - t_start
     n_params = N_ESTIMATORS * MAX_DEPTH  # informational, family-defined
 
+    # Family integrity (protocol §9): the fitted estimator must be the family's
+    # canonical class — a substitute (ExtraTrees, HistGradientBoosting, ...) is not
+    # allowed even if MODEL names the family. Checked against the live object, not
+    # just the MODEL string.
+    estimator_class = type(model).__name__
+    if family_violation(MODEL, estimator_class):
+        sys.stderr.write(
+            f"ERROR: MODEL={MODEL!r} requires its canonical estimator, but the "
+            f"fitted model is {estimator_class!r} — substitute families are not "
+            "allowed (protocol §9).\n"
+        )
+        sys.exit(2)
+
     print("---")
     print(f"val_logloss:    {metrics['val_logloss']:.6f}")
     print(f"val_acc:        {metrics['val_acc']:.6f}")
@@ -120,6 +137,7 @@ def main():
     print(f"model_family:   {MODEL}")
     print(f"n_params:       {n_params}")
     print(f"task_name:      {TASK_NAME}")
+    print(f"estimator_class: {estimator_class}")
     print("END_OF_TRIAL", flush=True)
 
 

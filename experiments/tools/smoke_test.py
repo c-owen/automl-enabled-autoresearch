@@ -141,6 +141,14 @@ def _run_c0(work):
     return _read_runs(logs)
 
 
+def _bo(work, args, logs):
+    return subprocess.run(
+        [sys.executable, "tools/run_bo.py", *args, "--logs-dir", str(logs),
+         "--results-tsv", str(Path(logs).parent / "results.tsv")],
+        cwd=str(work), capture_output=True, text=True, timeout=600,
+    )
+
+
 def _run_c1(work):
     logs = Path(work) / "c1" / "logs"
     logs.mkdir(parents=True)
@@ -149,15 +157,24 @@ def _run_c1(work):
     for commit, src, pre, post, desc in _agent_trials()[:2]:
         _run_trial(work, logs, commit, src, pre, post, desc)
 
+    # v1.1 (A1): exercise --specs (no session) and a refused out-of-spec call.
+    specs = subprocess.run([sys.executable, "tools/run_bo.py", "--specs", "xgboost"],
+                           cwd=str(work), capture_output=True, text=True)
+    if specs.returncode != 0 or "legal search space" not in specs.stdout:
+        raise RuntimeError(f"--specs failed: {specs.stdout}\n{specs.stderr}")
+    rows_before = len(_read_runs(logs))
+    refused = _bo(work, ["--family", "xgboost", "--budget", "5", "--space",
+                         '{"max_depth": {"type": "int", "low": 50, "high": 60}}'], logs)
+    if refused.returncode != 2 or "REFUSED" not in refused.stderr:
+        raise RuntimeError(f"out-of-spec call not refused: rc={refused.returncode}\n"
+                           f"{refused.stdout}\n{refused.stderr}")
+    if len(_read_runs(logs)) != rows_before:
+        raise RuntimeError("refused call consumed trials (should be zero)")
+
     space = json.dumps({"max_depth": {"type": "int", "low": 2, "high": 6},
                         "learning_rate": {"type": "float", "low": 0.02,
                                           "high": 0.3, "log": True}})
-    result = subprocess.run(
-        [sys.executable, "tools/run_bo.py", "--family", "xgboost",
-         "--budget", "5", "--space", space, "--logs-dir", str(logs),
-         "--results-tsv", str(logs.parent / "results.tsv")],
-        cwd=str(work), capture_output=True, text=True, timeout=600,
-    )
+    result = _bo(work, ["--family", "xgboost", "--budget", "5", "--space", space], logs)
     if result.returncode != 0:
         raise RuntimeError(f"BO episode failed (rc={result.returncode}):\n"
                            f"{result.stdout}\n{result.stderr}")

@@ -83,6 +83,11 @@ def validate_run_row(row) -> list:
         errors.append(
             f"bo_trial_index has type {type(trial_index).__name__}, expected int/null"
         )
+    est = row.get("estimator_class")
+    if "estimator_class" in row and est is not None and not isinstance(est, str):
+        errors.append(
+            f"estimator_class has type {type(est).__name__}, expected str/null"
+        )
     return errors
 
 

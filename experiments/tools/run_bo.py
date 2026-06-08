@@ -113,13 +113,36 @@ def _count_prior_episodes(runs_jsonl: str) -> int:
 # ---------------------------------------------------------------------------
 
 
+def format_specs(family: str) -> str:
+    """Human-readable legal search space + pinned defaults for a family.
+
+    Printed by `--specs <family>` and appended to every refusal message, so an
+    invalid call teaches the agent the legal box at zero trial cost (protocol
+    §3.2, v1.1)."""
+    specs = fa.PARAM_SPECS[family]
+    defaults = fa.DEFAULTS[family]
+    lines = [f"legal search space for family '{family}':"]
+    for param, spec in specs.items():
+        if spec["type"] in ("int", "float"):
+            log = " (log-scale)" if spec.get("log") else ""
+            lines.append(f"  {param}: {spec['type']} in [{spec['low']}, {spec['high']}]{log}")
+        else:
+            lines.append(f"  {param}: categorical, choices {spec['choices']}")
+    lines.append("defaults used for any parameter you do not declare:")
+    for param, value in defaults.items():
+        lines.append(f"  {param} = {value!r}")
+    return "\n".join(lines)
+
+
 def parse_space(family: str, space: dict) -> dict:
     """Validate and normalize an agent-declared search space (the box).
 
-    Refuses (zero trials) if a key is not a tunable param of the family, or an
-    entry is structurally malformed. Bounds are NOT clamped to PARAM_SPECS: an
-    out-of-spec value, if sampled, fails at fit time and takes the penalty
-    (protocol §3.3) — key validity is the pre-flight contract (§3.2).
+    Refuses (zero trials) if a key is not a tunable param of the family, an entry
+    is structurally malformed, or (v1.1, protocol §3.2) the declared bounds/choices
+    fall outside the adapter's `PARAM_SPECS`: an int/float box must lie within the
+    spec range, and categorical choices must be a subset of the spec choices. This
+    is pre-flight value validation — out-of-spec boxes can no longer be sampled and
+    fail in-episode (§3.3). Every refusal message includes the family's full specs.
     """
     if not isinstance(space, dict) or not space:
         raise BORefusal("space must be a non-empty JSON object of param -> spec")
@@ -129,11 +152,17 @@ def parse_space(family: str, space: dict) -> dict:
         if key not in specs:
             raise BORefusal(
                 f"unknown hyperparameter {key!r} for family {family!r}; "
-                f"allowed: {sorted(specs)}"
+                f"allowed: {sorted(specs)}.\n{format_specs(family)}"
             )
+        adapter_spec = specs[key]
         if not isinstance(spec, dict) or "type" not in spec:
             raise BORefusal(f"space[{key!r}] must be an object with a 'type'")
         kind = spec["type"]
+        if kind != adapter_spec["type"]:
+            raise BORefusal(
+                f"space[{key!r}] declares type {kind!r} but the adapter param is "
+                f"{adapter_spec['type']!r}.\n{format_specs(family)}"
+            )
         if kind in ("int", "float"):
             if "low" not in spec or "high" not in spec:
                 raise BORefusal(f"space[{key!r}] ({kind}) needs 'low' and 'high'")
@@ -143,6 +172,13 @@ def parse_space(family: str, space: dict) -> dict:
                 raise BORefusal(f"space[{key!r}] low/high must be numbers")
             if low > high:
                 raise BORefusal(f"space[{key!r}] low {low} > high {high}")
+            # v1.1: the declared box must lie within the adapter's legal range.
+            if low < adapter_spec["low"] or high > adapter_spec["high"]:
+                raise BORefusal(
+                    f"space[{key!r}] range [{low}, {high}] is outside the adapter's "
+                    f"legal range [{adapter_spec['low']}, {adapter_spec['high']}].\n"
+                    f"{format_specs(family)}"
+                )
             normalized[key] = {
                 "type": kind, "low": low, "high": high,
                 "log": bool(spec.get("log", False)),
@@ -151,12 +187,38 @@ def parse_space(family: str, space: dict) -> dict:
             choices = spec.get("choices")
             if not isinstance(choices, list) or not choices:
                 raise BORefusal(f"space[{key!r}] (categorical) needs non-empty 'choices'")
+            # v1.1: declared choices must be a subset of the adapter's choices.
+            illegal = [c for c in choices if c not in adapter_spec["choices"]]
+            if illegal:
+                raise BORefusal(
+                    f"space[{key!r}] choices {illegal} are not allowed; the adapter's "
+                    f"choices are {adapter_spec['choices']}.\n{format_specs(family)}"
+                )
             normalized[key] = {"type": "categorical", "choices": list(choices)}
         else:
             raise BORefusal(
                 f"space[{key!r}] has bad type {kind!r} (int|float|categorical)"
             )
     return normalized
+
+
+def _disclosure_lines(family: str, declared_params) -> list:
+    """Pinned-default disclosure + preprocessing caveat for the episode summary
+    (protocol §3.4, v1.1). Lists every DEFAULTS param the agent did not declare."""
+    declared = set(declared_params or ())
+    undeclared = [(p, v) for p, v in fa.DEFAULTS[family].items() if p not in declared]
+    lines = []
+    if undeclared:
+        lines.append("pinned defaults for parameters you did not declare:")
+        for param, value in undeclared:
+            lines.append(f"  {param} = {value!r}")
+    lines.append(
+        "Note: episode scores use the harness's fixed default preprocessing and the "
+        "pinned defaults above. To compare against your own incumbent (which may use "
+        "different preprocessing or unbounded params), adopt the config into train.py "
+        "and run a trial."
+    )
+    return lines
 
 
 # ---------------------------------------------------------------------------
@@ -387,12 +449,13 @@ def execute_episode(plan, family, budget, logs_dir, results_tsv, commit) -> dict
         best_summary=best["summary"],
     )
 
-    # Persist full episode stdout.
+    # Persist full episode stdout, including the pinned-default disclosure.
+    disclosure = _disclosure_lines(family, list(space))
     runs_log_dir = os.path.join(logs_dir, "runs")
     os.makedirs(runs_log_dir, exist_ok=True)
     with open(os.path.join(runs_log_dir, f"{episode_id}.log"), "w",
               encoding="utf-8") as fh:
-        fh.write("\n".join(log_lines) + "\n")
+        fh.write("\n".join(log_lines + [""] + disclosure) + "\n")
 
     return {
         "episode_id": episode_id,
@@ -401,6 +464,7 @@ def execute_episode(plan, family, budget, logs_dir, results_tsv, commit) -> dict
         "best_summary": best["summary"],
         "trace": trace,
         "n_trials": budget,
+        "declared_params": list(space),
     }
 
 
@@ -419,6 +483,9 @@ def _print_agent_summary(result, family, task):
     print("\nper-trial trace:")
     for line in result["trace"]:
         print("  " + line)
+    print("")
+    for line in _disclosure_lines(family, result.get("declared_params", [])):
+        print(line)
     print(
         "\nTo adopt: edit train.py to this configuration, commit, and run "
         "run_trial.py as usual (that costs 1 trial and goes through the normal "
@@ -441,6 +508,10 @@ def main(argv=None) -> int:
     parser.add_argument("--family")
     parser.add_argument("--budget", type=int)
     parser.add_argument("--space")
+    parser.add_argument("--specs", choices=sorted(prepare.ALLOWED_FAMILIES),
+                        default=None,
+                        help="print a family's legal search space + defaults and exit "
+                             "(no session needed)")
     parser.add_argument("--logs-dir", default=os.environ.get("LOGS_DIR", "logs"))
     parser.add_argument("--results-tsv",
                         default=os.environ.get("RESULTS_TSV", "results.tsv"))
@@ -456,6 +527,11 @@ def main(argv=None) -> int:
         except Exception as exc:  # noqa: BLE001 — any failure -> no summary -> penalty
             sys.stderr.write(f"[bo-worker] {type(exc).__name__}: {exc}\n")
             return 1
+
+    # --specs: print the legal box for a family and exit (no live session required).
+    if args.specs:
+        print(format_specs(args.specs))
+        return 0
 
     if not args.family or args.budget is None or not args.space:
         parser.error("--family, --budget and --space are required")
