@@ -417,7 +417,8 @@ uv run python tools/run_reference_batch.py --method random --task cnae-9        
 ```
 
 Each command writes 20 self-contained run folders under
-`reference_runs/<method>-<task>-seed<N>/`. These are gitignored (results
+`reference_runs/<method>/<task>/seed<N>/` (so the whole reference grid is two
+top-level folders, `tpe/` and `random/`). These are gitignored (results
 artifacts, not code). `credit-g`/`balance-scale`/`cnae-9` are quick;
 `electricity` (45k rows) and `cnae-9` (856 features) are slower but unattended —
 start them and let them run. You can validate any run's ledger with

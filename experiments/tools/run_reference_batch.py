@@ -1,7 +1,8 @@
 """Sweep a reference arm across seeds (protocol §5: 20 seeds per dataset).
 
-Runs ``run_reference`` once per seed, sequentially (cheap, no LLM), into
-``<out_root>/<method>-<task>-seed<s>/``.
+Runs ``run_reference`` once per seed, sequentially (cheap, no LLM), into a nested
+``<out_root>/<method>/<task>/seed<s>/`` tree — so the full grid is two top-level
+folders (tpe, random), not a couple hundred sibling dirs.
 
     uv run python tools/run_reference_batch.py --method tpe --task credit-g \
         --seeds 0-19 --out-root reference_runs
@@ -39,9 +40,9 @@ def main(argv=None) -> int:
     print(f"sweeping {args.method} on {args.task}: {len(seeds)} seeds "
           f"x {args.trials} trials")
     for seed in seeds:
-        out_dir = os.path.join(
-            args.out_root, f"{args.method}-{args.task}-seed{seed}"
-        )
+        # Nested layout: <out_root>/<method>/<task>/seed<N>/ (created recursively
+        # by run_reference). Keeps the grid to a couple of top-level folders.
+        out_dir = os.path.join(args.out_root, args.method, args.task, f"seed{seed}")
         meta = run_reference(args.method, args.task, seed, args.trials, out_dir)
         print(f"  seed {seed:>2}: best val_logloss={meta['best_value']:.6f} -> {out_dir}")
     return 0
