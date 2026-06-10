@@ -18,6 +18,7 @@ import json
 import os
 import shutil
 import tempfile
+import time
 from datetime import datetime, timezone
 
 # v2 (Step 6): runs.jsonl rows gain source / bo_episode_id / bo_trial_index to
@@ -169,6 +170,25 @@ def parse_summary_block(stdout: str) -> dict:
 # Atomic JSONL append
 # ---------------------------------------------------------------------------
 
+def _replace_with_retry(src, dst, attempts=12, base_delay=0.05, max_delay=1.0):
+    """``os.replace`` that retries transient Windows sharing violations.
+
+    On Windows an antivirus scanner, the Search indexer, or OneDrive can briefly
+    hold a handle on the destination just as we rename over it, surfacing as
+    ``PermissionError`` (WinError 5/32). The lock clears in well under a second,
+    so retry with exponential backoff (~3s total) before giving up. Non-locking
+    errors propagate immediately, preserving the atomic-write contract.
+    """
+    for attempt in range(attempts):
+        try:
+            os.replace(src, dst)
+            return
+        except PermissionError:
+            if attempt == attempts - 1:
+                raise
+            time.sleep(min(base_delay * (2 ** attempt), max_delay))
+
+
 def append_run_row(jsonl_path, row: dict) -> None:
     """Append one JSON object as a line to ``jsonl_path``, atomically.
 
@@ -196,7 +216,7 @@ def append_run_row(jsonl_path, row: dict) -> None:
             fh.write(new_line)
             fh.flush()
             os.fsync(fh.fileno())
-        os.replace(tmp_path, jsonl_path)
+        _replace_with_retry(tmp_path, jsonl_path)
     except BaseException:
         if os.path.exists(tmp_path):
             os.remove(tmp_path)
